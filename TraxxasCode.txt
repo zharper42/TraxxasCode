@@ -1,0 +1,337 @@
+#include <Servo.h> 
+
+#include <IRremote.h> 
+
+ 
+
+//IR RECEIVER PIN 
+
+const int irReceiverPin = 2;  
+
+IRrecv irrecv(irReceiverPin); 
+
+decode_results results; 
+
+bool isPaused = false; //used for 'pausing' obstacle avoidance and motor  
+
+ 
+
+// STEERING SERVO 
+
+const int servoPin = 7; 
+
+Servo steeringServo; 
+
+ 
+
+// MOTOR PINS 
+
+const int rpwm = 5; 
+
+const int lpwm = 6; 
+
+ 
+
+// ULTRASONIC SENSORS 
+
+int leftTrigPin = 12;   // trigger 
+
+int leftEchoPin = 13;   // echo 
+
+long leftDistance;  
+
+ 
+
+int rightTrigPin = 9;   // trigger 
+
+int rightEchoPin = 8;   // echo 
+
+long rightDistance;  
+
+ 
+
+int frontTrigPin = 10;  // trigger 
+
+int frontEchoPin = 11;  // echo 
+
+long frontDistance;  
+
+ 
+
+int distanceThreshold = 12; // distance threshold in inches 
+
+ 
+
+unsigned long lastSensorReadTime = 0;    // time of the last sensor reading 
+
+const int sensorReadInterval = 250;     // interval between readings (ms) 
+
+ 
+
+// FUNCTION TO READ DISTANCE FROM A SENSOR 
+
+long readDistance(int trigPin, int echoPin) { 
+
+  digitalWrite(trigPin, LOW); 
+
+  delayMicroseconds(5); 
+
+  digitalWrite(trigPin, HIGH); 
+
+  delayMicroseconds(10); 
+
+  digitalWrite(trigPin, LOW); 
+
+ 
+
+  long duration = pulseIn(echoPin, HIGH, 30000); // timeout for safety (30ms) 
+
+ 
+
+  if (duration == 0) return 999; // no echo detected, return large distance 
+
+  return (duration / 2) / 74;    // convert duration to inches 
+
+} 
+
+ 
+
+// FUNCTION TO UPDATE SERVO ANGLE ONLY WHEN NEEDED 
+
+void setServoAngle(int angle) { 
+
+  static int currentAngle = -1; // track the last angle 
+
+  if (currentAngle != angle) { 
+
+    steeringServo.write(angle); 
+
+    currentAngle = angle; 
+
+  } 
+
+} 
+
+ 
+
+// DRIVE FORWARD 
+
+void driveForward() { 
+
+  analogWrite(rpwm, 120); //forward speed 
+
+  analogWrite(lpwm, 0); 
+
+} 
+
+ 
+
+// TURNING RIGHT 
+
+void turningRight() { 
+
+  Serial.println("Turning Right"); 
+
+  setServoAngle(45); // turning right 45 degrees 
+
+  driveForward(); 
+
+  delay(1500); 
+
+} 
+
+ 
+
+// TURNING LEFT 
+
+void turningLeft() { 
+
+  Serial.println("Turning Left"); 
+
+  setServoAngle(135); // turning left 45 degrees (from 90) 
+
+  driveForward(); 
+
+  delay(1500); 
+
+} 
+
+ 
+
+// DRIVE STRAIGHT 
+
+void driveStraight() { 
+
+  Serial.println("Driving Straight"); 
+
+  setServoAngle(90); // straight position 
+
+} 
+
+ 
+
+//STOPS THE CAR 
+
+void stopCar() { 
+
+  digitalWrite(rpwm, LOW); 
+
+  digitalWrite(lpwm, LOW); 
+
+  Serial.println("Car Stopped"); 
+
+} 
+
+ 
+
+// DEBUG DISTANCES 
+
+void debugDistances() { 
+
+  Serial.print("Front: "); 
+
+  Serial.print(frontDistance); 
+
+  Serial.print(" in, Left: "); 
+
+  Serial.print(leftDistance); 
+
+  Serial.print(" in, Right: "); 
+
+  Serial.println(rightDistance); 
+
+} 
+
+ 
+
+void setup() { 
+
+  Serial.begin(9600); 
+
+ 
+
+  // attach servo to servo object  
+
+  steeringServo.attach(servoPin); 
+
+ 
+
+  // ultrasonic sensor pins 
+
+  pinMode(leftTrigPin, OUTPUT); 
+
+  pinMode(rightTrigPin, OUTPUT); 
+
+  pinMode(frontTrigPin, OUTPUT); 
+
+ 
+
+  pinMode(leftEchoPin, INPUT); 
+
+  pinMode(rightEchoPin, INPUT); 
+
+  pinMode(frontEchoPin, INPUT); 
+
+ 
+
+  // bts7960 motor driver pins 
+
+  pinMode(rpwm, OUTPUT); 
+
+  pinMode(lpwm, OUTPUT); 
+
+ 
+
+  //IR Receiver  
+
+  irrecv.enableIRIn(); 
+
+} 
+
+ 
+
+void loop() { 
+
+  //this checks if OK button is pressed 
+
+  //if its pressed then it pauses, if pressed again it resumes 
+
+  if (irrecv.decode(&results)) { 
+
+    if (results.value == 0xFF02FD) { //THIS IS THE OK BUTTON ON THE ELEGOO REMOTE 
+
+      isPaused = !isPaused; 
+
+      Serial.println(isPaused ? "Car Paused" : "Car Resumed"); 
+
+      if (isPaused) stopCar(); 
+
+    } 
+
+    irrecv.resume(); 
+
+  } 
+
+  if (isPaused) return; 
+
+ 
+
+  // continuously check the front sensor for obstacles 
+
+  frontDistance = readDistance(frontTrigPin, frontEchoPin); 
+
+ 
+
+  if (frontDistance > distanceThreshold) { 
+
+    // No obstacle: Drive forward 
+
+    driveStraight(); 
+
+    driveForward(); 
+
+  } else { 
+
+    // Obstacle detected, handle turning 
+
+    while (frontDistance <= distanceThreshold) { 
+
+      // Read left and right distances to decide the turning direction 
+
+      leftDistance = readDistance(leftTrigPin, leftEchoPin); 
+
+      rightDistance = readDistance(rightTrigPin, rightEchoPin); 
+
+ 
+
+      if (leftDistance > rightDistance) { 
+
+        turningLeft(); 
+
+      } else { 
+
+        turningRight(); 
+
+      } 
+
+ 
+
+      // After turning, recheck the front sensor 
+
+      driveStraight(); 
+
+      driveForward(); 
+
+      delay(1000); // Stabilize after the turn 
+
+      frontDistance = readDistance(frontTrigPin, frontEchoPin); 
+
+ 
+
+      // If still blocked, the loop continues and tries turning again 
+
+    } 
+
+  } 
+
+} 
